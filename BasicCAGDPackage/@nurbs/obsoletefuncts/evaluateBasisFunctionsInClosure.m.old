@@ -1,0 +1,85 @@
+function evaluateBasisFunctionsInClosure(obj, varargin)
+
+if isa(obj.ControlPoints, 'rationalControlPointsStructure'); bSplineType = 'NURBS'; weightsData = {'WeightsInControlPoints', obj.ControlPoints}; else bSplineType = 'BSpline'; weightsData = {}; end
+
+[evaluationFlag, evaluationSettings] = preprocessor(obj, bSplineType, weightsData, varargin{:});
+
+if evaluationFlag
+    obj.DomainMappings.Parametric2Physical.DomainClosure(end+1).BasisFunctions  = tensorBSplineBasisFunctions(evaluationSettings{:});
+    obj.DomainMappings.Parametric2Physical.numberOfDomainClosureStackedCases    = obj.DomainMappings.Parametric2Physical.numberOfDomainClosureStackedCases +1;
+end
+
+end
+
+
+%%
+function [evaluationFlag, evaluationSettings] = preprocessor(obj, bSplineType, weightsData, varargin)
+
+if nargin == 3
+    evaluationSettings  = {{'DerivativesOrder', 0, 'Points', 10}};
+    derivativesOrder    = 0;
+    basisFunctions      = ones(1, obj.Connectivities.numberOfParametricCoordinates);
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        if isempty(obj.DomainMappings.Parametric2Physical.MonoParametricData(parametricCoordinateIndex).BasisFunctions)
+            obj.evaluateMonoParametricBasisFunctions(parametricCoordinateIndex, evaluationSettings);
+        end
+        derivativesOrder = min(obj.DomainMappings.Parametric2Physical.MonoParametricData(parametricCoordinateIndex).BasisFunctions(basisFunctions(parametricCoordinateIndex)).requestedDerivativesOrder, derivativesOrder);
+    end
+    
+else
+    [stackedFlag, stackedPosition]  = searchArguments(varargin, 'StackedBasisFunctions', 'cell');
+    [newFlag, newPosition]          = searchArguments(varargin, 'NewBasisFunctions', 'cell');
+    [derivFlag, derivPosition]      = searchArguments(varargin, 'DerivativesOrder', 'numeric');
+    basisFunctions                  = zeros(1, obj.Connectivities.numberOfParametricCoordinates);
+
+    if stackedFlag; 
+        data                                    = varargin{stackedPosition};
+        parametricCoordinates                   = data{1};
+        for parametricCoordinateIndex = 1:length(parametricCoordinates)
+            if data{2}(parametricCoordinateIndex) > obj.DomainMappings.Parametric2Physical.MonoParametricData(parametricCoordinates(parametricCoordinateIndex)).numberOfStackedCases;
+                throw(MException('NURBS:basisFunctionsEvaluationInClosure', 'Wrong input data, not existent stacked basis functions are requested.'));
+            end
+        end
+        basisFunctions(parametricCoordinates) = data{2};
+    end
+
+    if newFlag
+        if stackedFlag; if max(varargin{stackedPosition}{1}==varargin{newPosition}{1}); warning('NURBS:basisFunctionsEvaluationInClosure; Same parametric coordinates are given as stocked functions and as new functions, by default these parametric coordinates will be considered as new functions.'); end; end
+
+        data                    = varargin{newPosition};
+        parametricCoordinates   = data{1};
+        obj.evaluateMonoParametricBasisFunctions(data{1}, data{2});
+        
+        for index = 1:length(parametricCoordinates)
+            basisFunctions(parametricCoordinates(index)) = obj.DomainMappings.Parametric2Physical.MonoParametricData(parametricCoordinates(index)).numberOfStackedCases;
+        end
+    end
+
+    if derivFlag; derivativesOrder = varargin{derivPosition}; else derivativesOrder = 0; end
+
+end
+
+evaluationFlag = 1;
+twinEvaluation = 0;
+for index = 1:size(obj.DomainMappings.Parametric2Physical.DomainClosure, 1)
+    if min(obj.DomainMappings.Parametric2Physical.DomainClosure(index).monoParametricFunctions==basisFunctions)
+        evaluationFlag = 0;
+        twinEvaluation = index;
+        break
+    end
+end
+obj.DomainMappings.Parametric2Physical.DomainClosure().monoParametricFunctions = cat(1, obj.BasisFunctions.InDomainClosure.tensorBasisFunctions2MonoParametric, basisFunctions);
+
+if ~evaluationFlag
+    obj.BasisFunctions.InDomainClosure.BasisFunctions(obj.BasisFunctions.InDomainClosure.numberOfStackedCases+1) = obj.BasisFunctions.InDomainClosure.BasisFunctions(twinEvaluation);
+    return
+end
+
+monoParametricBasisFunctions = bSplineBasisFunctions.empty(1, 0);
+for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+    monoParametricBasisFunctions(parametricCoordinateIndex) = obj.DomainMappings.Parametric2Physical.MonoParametricData(parametricCoordinateIndex).BasisFunctions(basisFunctions(parametricCoordinateIndex));
+end
+
+evaluationSettings = [{bSplineType, monoParametricBasisFunctions, 'DerivativesOrder', derivativesOrder, 'Connectivities', obj.Connectivities, 'Evaluate'} weightsData];
+
+end

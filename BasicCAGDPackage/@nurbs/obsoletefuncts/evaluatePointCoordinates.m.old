@@ -1,0 +1,95 @@
+function varargout = evaluatePointCoordinates(obj, varargin)
+
+evaluationFlag = preprocessor(obj, varargin{:});
+
+if evaluationFlag
+    switch varargin{1}
+        case 'StorePoints'
+            evaluateAndStore(obj, domainBasisFunctionsIndex, varargin{:});
+        case 'PutOutPoints'
+            varargout{1} = evaluateAndPutOut(obj, domainBasisFunctionsIndex, varargin{:});
+    end
+end
+
+end
+
+
+%%
+function evaluationFlag = preprocessor(obj, varargin)
+
+if nargin == 1
+    if isempty(obj.BasisFunctions.InDomainClosure.BasisFunctions); obj.evaluateBasisFunctionsInClosure; end
+    domainBasisFunctionsIndex = 1;
+else
+    switch varargin{2}
+        case 'StackedBasisFunctions'
+            domainBasisFunctionsIndex = varargin{3};
+            obj.DomainMappings.Parametric2Physical.domainBasisFunctionsIndex = domainBasisFunctionsIndex;
+        case 'NewBasisFunctions'
+            
+    end
+end
+
+evaluationFlag  = 1;
+twinEvaluation = 0;
+for index = 1:length(obj.DomainMappings.Parametric2Physical)
+    if obj.DomainMappings.Parametric2Physical(index).domainBasisFunctionsIndex == domainBasisFunctionsIndex
+        evaluationFlag  = 0;
+        twinEvaluation = index;
+        break
+    end
+end
+
+if ~evaluationFlag
+    obj.DomainMappings.Parametric2Physical(end+1) = obj.DomainMappings.Parametric2Physical(twinEvaluation);
+end
+
+end
+
+%%
+function evaluateAndStore(obj, varargin)
+
+orientedControlPoints                           = permute(obj.ControlPoints.coordinates, [obj.Connectivities.controlPointsCountingSequence ndims(obj.ControlPoints.coordinates)]);
+obj.DomainMappings.Parametric2Physical.points   = zeros(obj.ControlPoints.numberOfCoordinates, obj.BasisFunctions.InDomainClosure.BasisFunctions.numberOfEvaluationPoints, obj.Connectivities.numberOfKnotPatches);
+for knotPatchIndex = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot        = obj.Connectivities.knotPatch2Knots(knotPatchIndex, 1:2:end);
+    controlIndices  = {obj.BasisFunctions.InParametricCoordinates(obj.Connectivities.controlPointsCountingSequence(1)).BasisFunctions.knotVector.knotPatch2BasisFunctions(leftKnot(1), :)};
+    for parametricCoordinateIndex = obj.Connectivities.controlPointsCountingSequence(2:end)
+        controlIndices  = cat(2, controlIndices, obj.BasisFunctions.InParametricCoordinates(parametricCoordinateIndex).BasisFunctions.knotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :));
+    end
+    
+    currentControlPoints    = reshape(orientedControlPoints(controlIndices{:}, :), [], obj.ControlPoints.numberOfCoordinates);
+    currentBasisFunctions   = obj.BasisFunctions.InDomainClosure.BasisFunctions.tensorBasisFunctions(:, :, :, knotPatchIndex);
+
+    for physicalCoordinateIndex = 1:obj.ControlPoints.numberOfCoordinates
+        obj.DomainMappings.Parametric2Physical.points(physicalCoordinateIndex, :, knotPatchIndex) = sum(currentBasisFunctions(:, :, 1).*repmat(currentControlPoints(:, physicalCoordinateIndex), 1, obj.BasisFunctions.InDomainClosure.BasisFunctions.numberOfEvaluationPoints), 1);
+    end
+
+end
+
+end
+
+%%
+function varargout = evaluateAndPutOut(obj, varargin)
+
+orientedControlPoints   = permute(obj.ControlPoints.coordinates, [obj.Connectivities.controlPointsCountingSequence ndims(obj.ControlPoints.coordinates)]);
+varargout{1}            = zeros(obj.ControlPoints.numberOfCoordinates, obj.BasisFunctions.InDomainClosure.BasisFunctions.numberOfEvaluationPoints, obj.Connectivities.numberOfKnotPatches);
+for knotPatchIndex = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot        = obj.Connectivities.knotPatch2Knots(knotPatchIndex, 1:2:end);
+    controlIndices  = {obj.BasisFunctions.InParametricCoordinates(obj.Connectivities.controlPointsCountingSequence(1)).BasisFunctions.knotVector.knotPatch2BasisFunctions(leftKnot(1), :)};
+    for parametricCoordinateIndex = obj.Connectivities.controlPointsCountingSequence(2:end)
+        controlIndices  = cat(2, controlIndices, obj.BasisFunctions.InParametricCoordinates(parametricCoordinateIndex).BasisFunctions.knotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :));
+    end
+    
+    currentControlPoints    = reshape(orientedControlPoints(controlIndices{:}, :), [], obj.ControlPoints.numberOfCoordinates);
+    currentBasisFunctions   = obj.BasisFunctions.InDomainClosure.BasisFunctions.tensorBasisFunctions(:, :, :, knotPatchIndex);
+
+    for physicalCoordinateIndex = 1:obj.ControlPoints.numberOfCoordinates
+        varargout{1}(physicalCoordinateIndex, :, knotPatchIndex) = sum(currentBasisFunctions(:, :, 1).*repmat(currentControlPoints(:, physicalCoordinateIndex), 1, obj.BasisFunctions.InDomainClosure.BasisFunctions.numberOfEvaluationPoints), 1);
+    end
+
+end
+
+end

@@ -1,0 +1,148 @@
+function evaluateTensorProducts(obj, varargin)
+
+switch obj.basisFunctionsType
+    case 'Rational'
+        tensorProductOfRationalBasisFunctions(obj, varargin);
+        
+    case 'NonRational'
+        for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+            if isempty(obj.BasisFunctions(parametricCoordinateIndex).basisFunctionsEvalsPerKnotPatch)
+                obj.BasisFunctions(parametricCoordinateIndex).evaluateBasisFunctionsPerKnotPatch;
+            end
+        end
+        tensorProductOfBasisFunctions(obj, varargin);
+        
+    otherwise
+        msgID       = 'CAGD:basisFunctionsTensorProduct';
+        msg         = 'Wrong input data, invalid basis functions type.';
+        Exception   = MException(msgID, msg);
+        throw(Exception);
+end
+
+end
+
+
+%%  
+function tensorProductOfRationalBasisFunctions(obj, varargin)
+
+for parametricCoordinatesIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+    if obj.BasisFunctions(parametricCoordinatesIndex).knotVector.numberOfBasisFunctions ~= size(obj.weights, parametricCoordinatesIndex)
+        msgID       = 'CAGD:BasisFunctionsTensorProduct';
+        msg         = 'The input data of control points'' weights and the knot vectors are inconsistent.';
+        Exception   = MException(msgID, msg);
+        throw(Exception);
+    end
+end
+
+obj.tensorBasisFunctions = [];
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot = zeros(1, obj.Connectivities.numberOfParametricCoordinates);
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        leftKnot(parametricCoordinateIndex) = obj.Connectivities.knotPatch2Knots(currentKnotPatch, 1+2*(parametricCoordinateIndex-1));
+    end
+    
+    controlIndices = cell(1, obj.Connectivities.numberOfParametricCoordinates);
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        controlIndices{parametricCoordinateIndex} = obj.BasisFunctions(parametricCoordinateIndex).knotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :);
+    end
+    currentWeights = obj.weights(controlIndices{:});
+    
+    totalNumberOfEvaluationPoints = zeros(1, obj.Connectivities.numberOfParametricCoordinates);
+    totalNumberOfEvaluationPoints(1) = size(obj.BasisFunctions(1).basisFunctionsEvalsPerKnotPatch, 2);
+    for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+        totalNumberOfEvaluationPoints(parametricCoordinateIndex) = size(obj.BasisFunctions(parametricCoordinateIndex).basisFunctionsEvalsPerKnotPatch, 2);
+    end
+    totalNumberOfEvaluationPoints = prod(totalNumberOfEvaluationPoints);
+    
+    repetitionPattern = ones(1, obj.numberOfParametricCoordinates+1);
+    repetitionPattern(end) = totalNumberOfEvaluationPoints;
+    
+    basisFunctions = obj.BasisFunctions(1).basisFunctionsEvalsPerKnotPatch(:, :, leftKnot(1), 1)';
+    for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+        basisFunctions = kron(basisFunctions, obj.BasisFunctions(parametricCoordinateIndex).basisFunctionsEvalsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), 1)');
+    end
+    
+    basisFunctions = reshape(basisFunctions', [obj.Connectivities.order, totalNumberOfEvaluationPoints]);
+    basisFunctions = basisFunctions.*repmat(currentWeights, repetitionPattern);
+    
+    obj.weightField = sum(basisFunctions);
+    for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+        obj.weightField = sum(obj.weightField);
+    end
+    
+    basisFunctions = basisFunctions./repmat(obj.weightField, obj.Connectivities.order);
+%     functPosition = ones(1, obj.Connectivities.numberOfParametricCoordinates);
+    obj.tensorBasisFunctions = cat(obj.Connectivities.numberOfParametricCoordinates+2, obj.tensorBasisFunctions, basisFunctions, 1);
+    
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        for derivativeIndex = 2:obj.BasisFunctions(parametricCoordinateIndex).requestedDerivativesOrder
+            
+            W       = Ndu(1,:)*w*Ndv(1,:)';
+            dWdu    = Ndu(2,:)*w*Ndv(1,:)';
+            dWdv    = Ndu(1,:)*w*Ndv(2,:)';
+            d2Wdu2  = Ndu(3,:)*w*Ndv(1,:)';
+            d2Wdv2  = Ndu(1,:)*w*Ndv(3,:)';
+            d2Wduv  = Ndu(2,:)*w*Ndv(2,:)';
+            
+            % First derivative with respect to u
+            dRdu = (Ndu(2,:)'*W-Ndu(1,:)'*dWdu)*Ndv(1,:).*w/W^2;
+            
+            % First derivative with respect to v
+            dRdv = Ndu(1,:)'*(Ndv(2,:)*W-Ndv(1,:)*dWdv).*w/W^2;
+            
+            % Second derivatives with respect to u and v
+            Rduu = ( Ndu(3,:)'*W -Ndu(1,:)'*d2Wdu2 -2*Ndu(2,:)'*dWdu +2*Ndu(1,:)'*dWdu^2/W )*Ndv(1,:).*w/W^2;
+            Rdvv = Ndu(1,:)'*( Ndv(3,:)*W -Ndv(1,:)*d2Wdv2 -2*Ndv(2,:)*dWdv +2*Ndv(1,:)*dWdv^2/W ).*w/W^2;
+            Rduv = ( Ndu(2,:)'*(Ndv(2,:)*W -Ndv(1,:)*dWdv) ...
+                -Ndu(1,:)'*(Ndv(2,:)*dWdu -Ndv(1,:)*(d2Wduv +2*dWdu*dWdv/W)) ).*w/W^2;
+            
+            Rduv = Ndu(2,:)'*Ndv(2,:).*w/Nw-...
+                Ndu(1,:)'*Ndv(1,:).*w*Nduvw/Nw^2-...
+                Ndu(1,:)'*Ndv(2,:).*w*Nduw/Nw^2-...
+                Ndu(2,:)'*Ndv(1,:).*w*Ndvw/Nw^2+...
+                2*Ndu(1,:)'*Ndv(1,:).*w*Nduw*Ndvw/Nw^3;
+        end
+    end
+        
+end
+
+end
+
+
+
+
+%%  
+function tensorProductOfBasisFunctions(obj, varargin)
+
+obj.tensorBasisFunctions = [];
+
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot = zeros(1, obj.Connectivities.numberOfParametricCoordinates);
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        leftKnot(parametricCoordinateIndex) = obj.Connectivities.knotPatch2Knots(currentKnotPatch, 1+2*(parametricCoordinateIndex-1));
+    end
+    
+    controlIndices = cell(1, obj.Connectivities.numberOfParametricCoordinates);
+    for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+        controlIndices{parametricCoordinateIndex} = obj.BasisFunctions(parametricCoordinateIndex).knotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :);
+    end
+    
+    totalNumberOfEvaluationPoints = zeros(1, obj.Connectivities.numberOfParametricCoordinates);
+    totalNumberOfEvaluationPoints(1) = size(obj.BasisFunctions(1).basisFunctionsEvalsPerKnotPatch, 2);
+    basisFunctions = obj.BasisFunctions(1).basisFunctionsEvalsPerKnotPatch(:, :, leftKnot(1), 1)';
+    for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+        totalNumberOfEvaluationPoints(parametricCoordinateIndex) = size(obj.BasisFunctions(parametricCoordinateIndex).basisFunctionsEvalsPerKnotPatch, 2);
+        basisFunctions = kron(basisFunctions, obj.BasisFunctions(parametricCoordinateIndex).basisFunctionsEvalsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), 1)');
+    end
+    
+    totalNumberOfEvaluationPoints = prod(totalNumberOfEvaluationPoints);
+    
+    basisFunctions = reshape(basisFunctions', [obj.Connectivities.order, totalNumberOfEvaluationPoints]);
+    
+    obj.tensorBasisFunctions = cat(obj.Connectivities.numberOfParametricCoordinates+2, obj.tensorBasisFunctions, basisFunctions);
+        
+end
+
+end

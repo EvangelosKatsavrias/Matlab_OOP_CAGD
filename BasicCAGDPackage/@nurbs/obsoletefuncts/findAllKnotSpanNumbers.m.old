@@ -1,0 +1,63 @@
+function obj = findAllKnotSpanNumbers(obj)
+
+obj.AdditionalProperties.knotSpanNumbers = cell(1, obj.numberOfParametricCoordinates);
+
+for parametricCoordinateIndex = 1:obj.numberOfParametricCoordinates
+    
+    obj.AdditionalProperties.knotSpanNumbers{parametricCoordinateIndex} = zeros(1, obj.AdditionalProperties.numberOfnonZeroKnotSpans(parametricCoordinateIndex));
+    
+    for nonZeroKnotSpanIndex = 1:obj.AdditionalProperties.numberOfnonZeroKnotSpans(parametricCoordinateIndex)
+        
+        elementLeftBound = obj.AdditionalProperties.knotsWithoutMultiplicities{parametricCoordinateIndex}(nonZeroKnotSpanIndex);
+        
+        obj.AdditionalProperties.knotSpanNumbers{parametricCoordinateIndex}(nonZeroKnotSpanIndex) = ...
+            FindSpan(obj.degree(parametricCoordinateIndex), elementLeftBound, obj.knots{parametricCoordinateIndex});
+        
+    end
+    
+end
+
+end
+
+
+
+function uspan = FindSpan(basisDegree, knotValue, knotVector)
+% Determine the knot span index
+% Input: basisDegree, knotValue, knotVector
+% Return: the knot span index
+
+n = length(knotVector)-basisDegree-2;  % n=m-p-1=(length(U)-1)-p-1=length(U)-p-2
+
+if (knotValue == knotVector(n+2))     % Check the equality with the last knot of the last non-zero span, the position of it is the last element of the knot vector subtracting the multiplicity of the last knot minus one.  length(U)-p
+    
+    uspan = n;    % The last non-zero span is indexed as length(U)-p-1
+
+else
+    
+    low     = basisDegree+1;      % Setting the bounds of the initial interval
+    high    = n+2;
+    mid     = floor((low+high)/2);   % Applying the midsection method
+    iter    = 0;
+    
+    while (knotValue<knotVector(mid) || knotValue>=knotVector(mid+1)) % Checking if u is in [mid,mid+1] span
+        
+        if (knotValue<knotVector(mid)) 
+            high = mid;
+        else
+            low  = mid; 
+        end
+        
+        mid     = floor((low+high)/2);
+        iter    = iter+1;
+        
+        if iter == n
+            error('Incosistent bspline data, verify the data');
+        end
+        
+    end
+    
+    uspan = mid-1;           % The final result if u is in [mid,mid+1] span
+
+end
+
+end

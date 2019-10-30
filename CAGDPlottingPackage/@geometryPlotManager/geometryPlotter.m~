@@ -1,0 +1,58 @@
+classdef geometryPlotter < handle & hgsetget & dynamicprops & matlab.mixin.Copyable
+    
+    properties
+        plotViews
+        CSDirectors
+        CAGDPlotSettings
+        
+    end
+    
+    methods
+        
+        function obj = geometryPlotter(varargin)
+            
+        end
+
+        function showClosure(obj)
+            plotClosure(obj);
+        end
+        
+        function hideClosure(obj)
+            plotClosure(obj);
+        end
+        
+        function showControlLattice(obj)
+            plotControlLattice(obj);
+        end
+        
+        function hideControlLattice(obj)
+            plotControlLattice(obj);
+        end
+        
+        function showCovariants(obj)
+            plotCovariants(obj);
+        end
+        
+        function hideCovariants(obj)
+            plotCovariants(obj);
+        end
+        
+        function showKnotMarkers(obj)
+            plotKnotPoints(obj);
+        end
+        
+        function hideKnotMarkers(obj)
+            plotKnotPoints(obj);
+        end
+        
+        function showKnotLines(obj)
+            plotKnotLines(obj);
+        end
+        
+        function hideKnotLines(obj)
+            plotKnotLines(obj);
+        end
+        
+    end
+
+end

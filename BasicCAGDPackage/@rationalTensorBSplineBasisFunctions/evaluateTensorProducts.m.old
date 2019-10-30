@@ -1,0 +1,394 @@
+function evaluateTensorProducts(obj, varargin)
+
+secondDerivativesFlag = preprocessor(obj, varargin);
+
+switch obj.basisFunctionsType
+    case 'NURBS'
+        if max(obj.requestedDerivativesOrder) > 0
+            switch obj.numberOfParametricCoordinates
+                case 1; rationalDerivativeBasisFunctions1D(obj, varargin{:});
+                case 2; tensorProductOfRationalDerivativeBasisFunctions2D(obj, secondDerivativesFlag, varargin{:});
+                case 3; tensorProductOfRationalDerivativeBasisFunctions3D(obj, secondDerivativesFlag, varargin{:});
+                otherwise; throw(MException(obj.ExceptionsData.msgID, 'Incompatible parametric dimensions, it is possible to calculate derivatives up to parametric dimensions 3.'));
+            end
+        else tensorProductOfRationalBasisFunctions(obj, varargin{:});
+        end
+        
+    case 'BSpline'
+        if max(obj.requestedDerivativesOrder) > 0
+            tensorProductOfDerivativeBasisFunctions(obj, secondDerivativesFlag, varargin{:});
+        else tensorProductOfBasisFunctions(obj, varargin{:});
+        end
+        
+    otherwise; throw(MException(obj.ExceptionsData.msgID, 'Wrong input data, invalid basis functions type.'));
+
+end
+
+if isfield(obj.ExceptionsData, 'connectivitiesHandle'); delete(obj.ExceptionsData.connectivitiesHandle); end
+if isfield(obj.ExceptionsData, 'basisFunsHandle'); delete(obj.ExceptionsData.basisFunsHandle); end
+if isfield(obj.ExceptionsData, 'weightsHandle'); delete(obj.ExceptionsData.weightsHandle); end
+
+end
+
+function secondDerivativesFlag = preprocessor(obj, varargin)
+
+if max(obj.requestedDerivativesOrder) == 0
+    numberOfCalcDerivatives     = 1;
+    secondDerivativesFlag       = 0;
+elseif max(obj.requestedDerivativesOrder) > 1
+    secondDerivativesFlag       = 1;
+    numberOfCalcDerivatives     = 1 +2*obj.numberOfParametricCoordinates +nchoosek(obj.numberOfParametricCoordinates, 2);
+elseif max(obj.requestedDerivativesOrder) == 1
+    secondDerivativesFlag       = 0;
+    numberOfCalcDerivatives     = 1 +obj.numberOfParametricCoordinates;
+end
+
+if strcmp(obj.basisFunctionsType, 'NURBS') || strcmp(obj.basisFunctionsType, 'BSpline')
+    if isempty(obj.findprop('totalNumberOfEvaluationPoints')); obj.addprop('totalNumberOfEvaluationPoints'); end
+    if isempty(obj.findprop('totalNumberOfBasisFunctions')); obj.addprop('totalNumberOfBasisFunctions'); end
+    
+    if iscell(obj.MonoParametricBasisFunctions(1).evaluationsPerKnotPatch)
+        obj.numberOfEvaluationPoints = 1;
+        for parametricCoordinateIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+            obj.numberOfEvaluationPoints = kron(obj.MonoParametricBasisFunctions(parametricCoordinateIndex).numberOfEvaluationPointsPerKnotPatch, obj.numberOfEvaluationPoints);
+        end
+        obj.numberOfEvaluationPoints = reshape(obj.numberOfEvaluationPoints, 1, []);
+    else
+        obj.numberOfEvaluationPoints    = prod([obj.MonoParametricBasisFunctions.numberOfEvaluationPointsPerKnotPatch]);
+    end
+    obj.totalNumberOfEvaluationPoints   = prod([obj.MonoParametricBasisFunctions.totalNumberOfEvaluationPoints]);
+    obj.numberOfBasisFunctions          = obj.Connectivities.numberOfFunctionsPerKnotPatch;
+    obj.totalNumberOfBasisFunctions     = obj.Connectivities.numberOfFunctionsInBSplinePatch;
+    dataStructDimensions                = num2cell([obj.numberOfBasisFunctions obj.numberOfEvaluationPoints]);
+    
+    if strcmp(obj.basisFunctionsType, 'NURBS')
+        for parametricCoordinatesIndex = 1:obj.Connectivities.numberOfParametricCoordinates
+            if obj.MonoParametricBasisFunctions(parametricCoordinatesIndex).KnotVector.numberOfBasisFunctions ~= size(obj.weights, parametricCoordinatesIndex)
+                throw(MException(obj.ExceptionsData.msgID, 'The input data of control points'' weights and the knot vectors are inconsistent.'));
+            end
+        end
+        if isempty(obj.findprop('orientedWeights')); obj.ExceptionsData.weightsHandle = obj.addprop('orientedWeights'); end
+        if ~isvector(obj.weights); obj.orientedWeights = permute(obj.weights, obj.Connectivities.controlPointsCountingSequence); else obj.orientedWeights = obj.weights; end
+    end
+
+    if ~iscell(obj.MonoParametricBasisFunctions(1).evaluationsPerKnotPatch)
+        obj.tensorBasisFunctions            = zeros(dataStructDimensions{:}, numberOfCalcDerivatives, obj.Connectivities.numberOfKnotPatches);
+    end
+    if isempty(obj.findprop('OrientedBasisFunctions')); obj.ExceptionsData.basisFunsHandle = obj.addprop('OrientedBasisFunctions'); end
+    if isempty(obj.findprop('knotPatch2Knots')); obj.ExceptionsData.connectivitiesHandle = obj.addprop('knotPatch2Knots'); end
+    obj.OrientedBasisFunctions              = obj.MonoParametricBasisFunctions(obj.Connectivities.controlPointsCountingSequence);
+    tempConnect                             = reshape(obj.Connectivities.knotPatch2Knots, obj.Connectivities.numberOfKnotPatches, 2, []);
+    obj.knotPatch2Knots                     = reshape(tempConnect(:, :, obj.Connectivities.controlPointsCountingSequence), obj.Connectivities.numberOfKnotPatches, obj.numberOfParametricCoordinates*2);
+
+end
+
+end
+
+%%  Rational BSpline arbitrary dimensional
+function tensorProductOfRationalBasisFunctions(obj, varargin)
+
+if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+    obj.tensorBasisFunctions = cell(1, prod([obj.OrientedBasisFunctions.numberOfEvaluatedKnotPatches]));
+    knotPatches = obj.OrientedBasisFunctions(1).requestedEvaluationKnotPatches;
+    numOfPatches = [];
+    for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+        numOfPatches = [numOfPatches obj.OrientedBasisFunctions(parametricCoordinateIndex-1).KnotVector.numberOfKnotPatches];
+        knotPatches = reshape(repmat(knotPatches', 1, length(obj.OrientedBasisFunctions(parametricCoordinateIndex).requestedEvaluationKnotPatches)) +repmat(prod(numOfPatches)*(obj.OrientedBasisFunctions(parametricCoordinateIndex).requestedEvaluationKnotPatches-1), length(knotPatches), 1), 1, []);
+    end
+    for currentKnotPatch = knotPatches
+
+        leftKnot = obj.knotPatch2Knots(currentKnotPatch, 1:2:end);
+        
+        controlIndices = cell(1, obj.numberOfParametricCoordinates);
+        for parametricCoordinateIndex = 1:obj.numberOfParametricCoordinates
+            controlIndices{parametricCoordinateIndex} = obj.OrientedBasisFunctions(parametricCoordinateIndex).KnotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :);
+        end
+        
+        if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+            currentWeights = repmat(reshape(obj.orientedWeights(controlIndices{:}), obj.numberOfBasisFunctions, 1), 1, obj.numberOfEvaluationPoints(currentKnotPatch));
+        else
+            currentWeights = repmat(reshape(obj.orientedWeights(controlIndices{:}), obj.numberOfBasisFunctions, 1), 1, obj.numberOfEvaluationPoints);
+        end
+        if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch{leftKnot(1)}(:, :, 1);
+            for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch{leftKnot(parametricCoordinateIndex)}(:, :, 1), basisFunctions);
+            end
+        else
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 1);
+            for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), 1), basisFunctions);
+            end
+        end
+        
+        basisFunctions  = basisFunctions.*currentWeights;
+        weightField     = sum(basisFunctions, 1);
+        
+        obj.tensorBasisFunctions{currentKnotPatch}(:, :, 1) = basisFunctions./repmat(weightField, obj.numberOfBasisFunctions, 1);
+        
+    end
+else
+    
+    for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+        
+        leftKnot = obj.knotPatch2Knots(currentKnotPatch, 1:2:end);
+        
+        controlIndices = cell(1, obj.numberOfParametricCoordinates);
+        for parametricCoordinateIndex = 1:obj.numberOfParametricCoordinates
+            controlIndices{parametricCoordinateIndex} = obj.OrientedBasisFunctions(parametricCoordinateIndex).KnotVector.knotPatch2BasisFunctions(leftKnot(parametricCoordinateIndex), :);
+        end
+        currentWeights = repmat(reshape(obj.orientedWeights(controlIndices{:}), obj.numberOfBasisFunctions, 1), 1, obj.numberOfEvaluationPoints);
+        
+        if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch{leftKnot(1)}(:, :, 1);
+            for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch{leftKnot(parametricCoordinateIndex)}(:, :, 1), basisFunctions);
+            end
+        else
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 1);
+            for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), 1), basisFunctions);
+            end
+        end
+        
+        basisFunctions  = basisFunctions.*currentWeights;
+        weightField     = sum(basisFunctions, 1);
+        
+        obj.tensorBasisFunctions(:, :, 1, currentKnotPatch) = basisFunctions./repmat(weightField, obj.numberOfBasisFunctions, 1);
+        
+    end
+end
+
+end
+
+%%  Rational BSpline 1-Parametric with derivatives
+function rationalDerivativeBasisFunctions1D(obj, varargin)
+
+obj.tensorBasisFunctions = zeros(obj.numberOfBasisFunctions, obj.numberOfEvaluationPoints, obj.requestedDerivativesOrder, obj.Connectivities.numberOfKnotPatches);
+
+temp = rationalBSplineBasisFunctions(obj.MonoParametricBasisFunctions.KnotVector, obj.weights');
+temp.evaluatePerKnotPatch(obj.MonoParametricBasisFunctions.requestedPointsPattern, obj.MonoParametricBasisFunctions.requestedPoints, obj.MonoParametricBasisFunctions.requestedDerivativesOrder, obj.MonoParametricBasisFunctions.requestedEvaluationKnotPatches, obj.MonoParametricBasisFunctions.parentDomain);
+obj.tensorBasisFunctions = permute(temp.evaluationsPerKnotPatch, [1 2 4 3]);
+temp.controlListeners('Disable');
+
+end
+
+%%  Rational BSpline 2-Parametric with derivatives
+function tensorProductOfRationalDerivativeBasisFunctions2D(obj, secondDerivativesFlag, varargin)
+
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot        = obj.Connectivities.knotPatch2Knots(currentKnotPatch, 1:2:end);
+    controlIndices  = {obj.OrientedBasisFunctions(1).KnotVector.knotPatch2BasisFunctions(leftKnot(1), :) ...
+                       obj.OrientedBasisFunctions(2).KnotVector.knotPatch2BasisFunctions(leftKnot(2), :)};
+
+    w       = repmat(reshape(obj.orientedWeights(controlIndices{:}), obj.numberOfBasisFunctions, 1), 1, obj.numberOfEvaluationPoints);
+    if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+        Nu      = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch{leftKnot(1)}(:, :, 1);
+        dNdu    = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch{leftKnot(1)}(:, :, 2);
+    else
+        Nu      = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 1);
+        dNdu    = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 2);
+    end
+    if iscell(obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch)
+        Nv      = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch{leftKnot(2)}(:, :, 1);
+        dNdv    = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch{leftKnot(2)}(:, :, 2);
+    else
+        Nv      = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch(:, :, leftKnot(2), 1);
+        dNdv    = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch(:, :, leftKnot(2), 2);
+    end
+    R       = kron(Nv, Nu).*w;
+    dRdu    = kron(Nv, dNdu).*w;
+    dRdv    = kron(dNdv, Nu).*w;
+    W       = sum(R);
+    dWdu    = sum(dRdu);
+    dWdv    = sum(dRdv);
+    quadW   = repmat(W.^2, obj.numberOfBasisFunctions, 1);
+    quaddWdu= repmat(dWdu.^2./W, obj.numberOfBasisFunctions, 1);
+    quaddWdv= repmat(dWdv.^2./W, obj.numberOfBasisFunctions, 1);
+    dWdudWdv= repmat(dWdu.*dWdv./W, obj.numberOfBasisFunctions, 1);
+    W       = repmat(W, obj.numberOfBasisFunctions, 1);
+    dWdu    = repmat(dWdu, obj.numberOfBasisFunctions, 1);
+    dWdv    = repmat(dWdv, obj.numberOfBasisFunctions, 1);
+
+
+    if secondDerivativesFlag
+
+        if iscell(obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch)
+            d2Ndu   = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch{leftKnot(1)}(:, :, 3);
+        else
+            d2Ndu   = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 3);
+        end
+        if iscell(obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch)
+            d2Ndv   = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch{leftKnot(2)}(:, :, 3);
+        else
+            d2Ndv   = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch(:, :, leftKnot(2), 3);
+        end
+        d2Rdu   = kron(Nv, d2Ndu).*w;
+        d2Rdv   = kron(d2Ndv, Nu).*w;
+        d2Rduv  = kron(dNdv, dNdu).*w;
+        d2Wdu   = repmat(sum(d2Rdu), obj.numberOfBasisFunctions, 1);
+        d2Wdv   = repmat(sum(d2Rdv), obj.numberOfBasisFunctions, 1);
+        d2Wduv  = repmat(sum(d2Rduv), obj.numberOfBasisFunctions, 1);
+        
+        d2Rdu   = (d2Rdu.*W -2*dRdu.*dWdu +2*R.*quaddWdu -R.*d2Wdu)./quadW;
+        d2Rdv   = (d2Rdv.*W -2*dRdv.*dWdv +2*R.*quaddWdv -R.*d2Wdv)./quadW;
+        d2Rduv  = (d2Rduv.*W -dRdu.*dWdv -dRdv.*dWdu +2*R.*dWdudWdv -R.*d2Wduv)./quadW;
+
+        obj.tensorBasisFunctions(:, :, 4:6, currentKnotPatch) = cat(3, d2Rdu, d2Rdv, d2Rduv);
+        
+    end
+
+    dRdu    = (dRdu.*W -R.*dWdu)./quadW;
+    dRdv    = (dRdv.*W -R.*dWdv)./quadW;
+    R       = R./W;
+
+    obj.tensorBasisFunctions(:, :, 1:3, currentKnotPatch) = cat(3, R, dRdu, dRdv);
+    
+end
+
+end
+
+%%  Rational BSpline 3-Parametric with derivatives
+function tensorProductOfRationalDerivativeBasisFunctions3D(obj, secondDerivativesFlag, varargin)
+
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot        = obj.Connectivities.knotPatch2Knots(currentKnotPatch, 1:2:end);
+    controlIndices  = {obj.OrientedBasisFunctions(1).KnotVector.knotPatch2BasisFunctions(leftKnot(1), :) ...
+                       obj.OrientedBasisFunctions(2).KnotVector.knotPatch2BasisFunctions(leftKnot(2), :) ...
+                       obj.OrientedBasisFunctions(3).KnotVector.knotPatch2BasisFunctions(leftKnot(3), :)};
+
+    w       = repmat(reshape(obj.orientedWeights(controlIndices{:}), obj.numberOfBasisFunctions, 1), 1, obj.numberOfEvaluationPoints);
+    Nu      = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 1);
+    Nv      = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch(:, :, leftKnot(2), 1);
+    Nw      = obj.OrientedBasisFunctions(3).evaluationsPerKnotPatch(:, :, leftKnot(3), 1);
+    dNdu    = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 2);
+    dNdv    = obj.OrientedBasisFunctions(2).evaluationsPerKnotPatch(:, :, leftKnot(2), 2);
+    dNdw    = obj.OrientedBasisFunctions(3).evaluationsPerKnotPatch(:, :, leftKnot(3), 2);
+    R       = kron(Nw, kron(Nv, Nu)).*w;
+    dRdu    = kron(Nw, kron(Nv, dNdu)).*w;
+    dRdv    = kron(Nw, kron(dNdv, Nu)).*w;
+    dRdw    = kron(dNdw, kron(Nv, Nu)).*w;
+    W       = sum(R);
+    dWdu    = sum(dRdu);
+    dWdv    = sum(dRdv);
+    dWdw    = sum(dRdw);
+    quadW   = repmat(W.^2, obj.numberOfBasisFunctions, 1);
+    quaddWdu= repmat(dWdu.^2./W, obj.numberOfBasisFunctions, 1);
+    quaddWdv= repmat(dWdv.^2./W, obj.numberOfBasisFunctions, 1);
+    quaddWdw= repmat(dWdw.^2./W, obj.numberOfBasisFunctions, 1);
+    dWdudWdv= repmat(dWdu.*dWdv./W, obj.numberOfBasisFunctions, 1);
+    dWdwdWdv= repmat(dWdw.*dWdv./W, obj.numberOfBasisFunctions, 1);
+    dWdudWdw= repmat(dWdu.*dWdw./W, obj.numberOfBasisFunctions, 1);
+    W       = repmat(W, obj.numberOfBasisFunctions, 1);
+    dWdu    = repmat(dWdu, obj.numberOfBasisFunctions, 1);
+    dWdv    = repmat(dWdv, obj.numberOfBasisFunctions, 1);
+    dWdw    = repmat(dWdw, obj.numberOfBasisFunctions, 1);
+
+    if secondDerivativesFlag
+
+        d2Ndu   = obj.OrientedBasisFunctions(1).evaluationsPerKnotSpan(:, :, leftKnot(1), 3);
+        d2Ndv   = obj.OrientedBasisFunctions(2).evaluationsPerKnotSpan(:, :, leftKnot(2), 3);
+        d2Ndw   = obj.OrientedBasisFunctions(3).evaluationsPerKnotSpan(:, :, leftKnot(3), 3);
+        d2Rdu   = kron(Nw, kron(Nv, d2Ndu)).*w;
+        d2Rdv   = kron(Nw, kron(d2Ndv, Nu)).*w;
+        d2Rdw   = kron(d2Ndw, kron(Nv, Nu)).*w;
+        d2Rduv  = kron(Nw, kron(dNdv, dNdu)).*w;
+        d2Rdvw  = kron(dNdw, kron(dNdv, Nu)).*w;
+        d2Rduw  = kron(dNdw, kron(Nv, dNdu)).*w;
+        d2Wdu   = repmat(sum(d2Rdu), obj.numberOfBasisFunctions, 1);
+        d2Wdv   = repmat(sum(d2Rdv), obj.numberOfBasisFunctions, 1);
+        d2Wdw   = repmat(sum(d2Rdw), obj.numberOfBasisFunctions, 1);
+        d2Wduv  = repmat(sum(d2Rduv), obj.numberOfBasisFunctions, 1);
+        d2Wdvw  = repmat(sum(d2Rdvw), obj.numberOfBasisFunctions, 1);
+        d2Wduw  = repmat(sum(d2Rduw), obj.numberOfBasisFunctions, 1);
+        
+        d2Rdu   = (d2Rdu.*W -2*dRdu.*dWdu +2*R.*(quaddWdu) -R.*d2Wdu)./quadW;
+        d2Rdv   = (d2Rdv.*W -2*dRdv.*dWdv +2*R.*(quaddWdv) -R.*d2Wdv)./quadW;
+        d2Rdw   = (d2Rdw.*W -2*dRdw.*dWdw +2*R.*(quaddWdw) -R.*d2Wdw)./quadW;
+        d2Rduv  = (d2Rduv.*W -dRdu.*dWdv -dRdv.*dWdu +2*R.*dWdudWdv -R.*d2Wduv)./quadW;
+        d2Rdvw  = (d2Rdvw.*W -dRdv.*dWdw -dRdw.*dWdv +2*R.*dWdwdWdv -R.*d2Wdvw)./quadW;
+        d2Rduw  = (d2Rduw.*W -dRdu.*dWdw -dRdw.*dWdu +2*R.*dWdudWdw -R.*d2Wduw)./quadW;
+
+        obj.tensorBasisFunctions(:, :, 5:10, currentKnotPatch) = cat(3, d2Rdu, d2Rdv, d2Rdw, d2Rduv, d2Rdvw, d2Rduw);
+        
+    end
+
+    dRdu    = (dRdu.*W -R.*dWdu)./quadW;
+    dRdv    = (dRdv.*W -R.*dWdv)./quadW;
+    dRdw    = (dRdw.*W -R.*dWdw)./quadW;
+    R       = R./W;
+
+    obj.tensorBasisFunctions(:, :, 1:4, currentKnotPatch) = cat(3, R, dRdu, dRdv, dRdw);
+    
+end
+
+end
+
+%%  Non-rational arbitrary dimensional
+function tensorProductOfBasisFunctions(obj, varargin)
+
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot = obj.knotPatch2Knots(currentKnotPatch, 1:2:end);
+    
+    basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), 1);
+    for parametricCoordinateIndex = 2:obj.numberOfParametricCoordinates
+        basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), 1), basisFunctions);
+    end
+    
+    obj.tensorBasisFunctions(:, :, 1, currentKnotPatch) = basisFunctions;
+    
+end
+
+end
+
+%%  Non-rational arbitrary dimensional with derivatives
+function tensorProductOfDerivativeBasisFunctions(obj, secondDerivativesFlag, varargin)
+
+for currentKnotPatch = 1:obj.Connectivities.numberOfKnotPatches
+    
+    leftKnot = obj.knotPatch2Knots(currentKnotPatch, 1:2:end);
+    
+    derivativeIndex = [ones(1, obj.Connectivities.numberOfParametricCoordinates) 2];
+    for derivativePosition = 1:obj.Connectivities.numberOfParametricCoordinates+1
+        basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), derivativeIndex(1));
+        for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+            basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), derivativeIndex(parametricCoordinateIndex)), basisFunctions);
+        end
+        
+        obj.tensorBasisFunctions(:, :, derivativePosition, currentKnotPatch) = basisFunctions;
+        derivativeIndex = circshift(derivativeIndex, [0 1]);
+    end
+    
+    if secondDerivativesFlag
+        derivativeIndex = [3 ones(1, obj.Connectivities.numberOfParametricCoordinates-1)];
+        for derivativePosition = obj.Connectivities.numberOfParametricCoordinates+2:2*obj.Connectivities.numberOfParametricCoordinates+1
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), derivativeIndex(1));
+            for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), derivativeIndex(parametricCoordinateIndex)), basisFunctions);
+            end
+            
+            obj.tensorBasisFunctions(:, :, derivativePosition, currentKnotPatch) = basisFunctions;
+            derivativeIndex = circshift(derivativeIndex, [0 1]);
+        end
+        
+        combs       = nchoosek((1:obj.Connectivities.numberOfParametricCoordinates), 2);
+        unitVector  = ones(1, obj.Connectivities.numberOfParametricCoordinates);
+        index       = 1;
+        for derivativePosition = 2*obj.Connectivities.numberOfParametricCoordinates+2:size(obj.tensorBasisFunctions, 3)
+            derivativeIndex = unitVector;
+            derivativeIndex(combs(index, :)) = 2;
+            basisFunctions = obj.OrientedBasisFunctions(1).evaluationsPerKnotPatch(:, :, leftKnot(1), derivativeIndex(1));
+            for parametricCoordinateIndex = 2:obj.Connectivities.numberOfParametricCoordinates
+                basisFunctions = kron(obj.OrientedBasisFunctions(parametricCoordinateIndex).evaluationsPerKnotPatch(:, :, leftKnot(parametricCoordinateIndex), derivativeIndex(parametricCoordinateIndex)), basisFunctions);
+            end
+            
+            obj.tensorBasisFunctions(:, :, derivativePosition, currentKnotPatch) = basisFunctions;
+            index = index +1;
+        end
+    end
+end
+
+end
